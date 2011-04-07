@@ -35,7 +35,7 @@ class DemoWindow < Gosu::Window
        self.caption = "Ez ruby gosu chipmunk experminets"
        @space = CP::Space.new
        @space.iterations = 5
-       @space.gravity = CP::Vec2.new(0, 300)
+       @space.gravity = CP::Vec2.new(0, 663)
        # you can replace the background with any image with this line
        fill = Magick::TextureFill.new(Magick::ImageList.new("media/Splatter.jpg")) 
        background = Magick::Image.new(SCREEN_WIDTH, SCREEN_HEIGHT, fill)
@@ -49,10 +49,12 @@ class DemoWindow < Gosu::Window
   			
    def update
        @space.step(TICK)
+       @player.resetPosition 
 
        SUBSTEPS.times do  
          @player.reset_forces
-
+         @player.faceUp
+         
          if button_down? Gosu::KbUp
             @player.jump 
          end
@@ -87,10 +89,12 @@ class Player
    def initialize(win, inThisSpace, startX, startY, world)
       @window = win     
       @space = inThisSpace      
-      @player_x, @player_y = startX, startY      
+      @player_x, @player_y = startX, startY
+      @player_x_previous = @player_x   
       @world = world
       @middle_area_left = (SCREEN_WIDTH/2 - SCREEN_WIDTH/10) 
-      @middle_area_right = (SCREEN_WIDTH/2 + SCREEN_WIDTH/10) 
+      @middle_area_right = (SCREEN_WIDTH/2 + SCREEN_WIDTH/10)
+      @distWorldMoved = 0
       create_player()
    end
 
@@ -106,8 +110,9 @@ class Player
        @body = CP::Body.new(1, CP::moment_for_poly(1.0, box_vertices, CP::Vec2.new(0, 0))) # mass, moment of inertia
        @body.p = CP::Vec2.new(@player_x, @player_y)
        shape = CP::Shape::Poly.new(@body, box_vertices, CP::Vec2.new(0, 0))
-       shape.e = 0.0
+       shape.e = 0.1
        shape.u = 0.4
+       shape.collision_type = :player
        @body.a = (3*Math::PI/2.0) # angle in radians; faces towards top of screen
        @space.add_body(@body)
        @space.add_shape(shape)  
@@ -116,44 +121,59 @@ class Player
    def init_player_on_window(vertices)
        box_image = Magick::Image.new(EDGE_SIZE  * 2, EDGE_SIZE * 2)
        gc = Magick::Draw.new
-       gc.stroke('red')
-       gc.fill('plum')
+       gc.stroke('plum')
+       gc.fill('white')
        draw_vertices = vertices.map { |v| [v.x + EDGE_SIZE, v.y + EDGE_SIZE] }.flatten
        gc.polygon(*draw_vertices)
        gc.draw(box_image)
        return Gosu::Image.new(@window, box_image, false)
    end
    
+   def resetPosition
+      @player_x = @body.p.x + @distWorldMoved   
+   end   
+
    def reset_forces
        @body.reset_forces
    end
+   
+   def faceUp
+      @body.a = (3*Math::PI/2.0) # angle in radians; faces towards top of screen
+   end
+
+   def canJump?
+      x,y,base,height = @world.getEarthsPosition
+      puts @player_x
+      puts @body.p.x
+      return true if (@player_x >= (x-base+1) && @player_x < (x+base-1) && @body.p.y > (y - height - 25) && @body.p.y < y -height)
+   end 
 
    def jump
-       @body.apply_force((@body.a.radians_to_vec2 * (10000.0/SUBSTEPS)), CP::Vec2.new(0.0, 0.0))
+       @body.apply_force((@body.a.radians_to_vec2 * (40000.0/SUBSTEPS)), CP::Vec2.new(0.0, 0.0)) if canJump?
    end
 
    def move_left
-       @player_x -= PLAYER_MOVE_XY
-       if ((@player_x <= (SCREEN_WIDTH/2 - SCREEN_WIDTH/10)) || (@player_x >= @middle_area_left))
-         @body.p.x -= PLAYER_MOVE_XY
-       else 
-         @world.moveWorldRight(PLAYER_MOVE_XY)
-       end
-      
-      puts @middle_area_left
+       if @player_x > 10
+         if ((@player_x <= (SCREEN_WIDTH/2 - SCREEN_WIDTH/10)) || (@player_x >= @middle_area_left))
+            @body.p.x -= PLAYER_MOVE_XY
+         else 
+            @distWorldMoved -= PLAYER_MOVE_XY
+            @world.moveWorldRight(PLAYER_MOVE_XY)
+         end
        
-       if ((@player_x < @middle_area_left) && (@middle_area_left > (SCREEN_WIDTH/2 - SCREEN_WIDTH/10)))
-         @middle_area_left -= PLAYER_MOVE_XY 
-         @middle_area_right -= PLAYER_MOVE_XY 
+         if ((@player_x < @middle_area_left) && (@middle_area_left > (SCREEN_WIDTH/2 - SCREEN_WIDTH/10)))
+            @middle_area_left -= PLAYER_MOVE_XY 
+            @middle_area_right -= PLAYER_MOVE_XY 
+         end
        end
    end
    
    def move_right
        if @player_x < END_OF_WORLD 
-         @player_x += PLAYER_MOVE_XY
          if ((@player_x >= (END_OF_WORLD - SCREEN_WIDTH/10)) || (@player_x <= @middle_area_right))
             @body.p.x += PLAYER_MOVE_XY
          else
+            @distWorldMoved += PLAYER_MOVE_XY
             @world.moveWorldLeft(PLAYER_MOVE_XY)
          end
 
@@ -181,33 +201,32 @@ class World
    end
    
    def setup_level()    
-      (1..180).each do |i|
-         make_earth(100 + (i*30) , 630, 15, 30)
-      end
+         make_earth(600, 630, 700, 30)
    end
 
    def make_earth(x, y, base, height)
        fill = Magick::GradientFill.new(0, height * 0.4, base*2, height * 0.4, '#fff', '#666')
-       box_image = Magick::Image.new(base*2, height+12, fill)
-       gc = Magick::Draw.new 
-       gc.fill('brown')
-       # all the triangles are part of the same body
-       body = CP::Body.new(Float::MAX, Float::MAX)   
-       #body.p = CP::Vec2.new(x, y)   
+       box_image = Magick::Image.new(base*2, height*2, fill)
+       body = CP::Body.new(Float::MAX, Float::MAX)     
        shape_vertices =  [CP::Vec2.new(-base, base), CP::Vec2.new(base, base), CP::Vec2.new(base, -height), CP::Vec2.new(-base, -height)]
        shape = CP::Shape::Poly.new(body, shape_vertices, CP::Vec2.new(x, y))
        shape.e = 1
        shape.u = 1
-       shape.collision_type = :earth
        @space.add_static_shape(shape)
-       gc.polygon(x - base + 1, y + base - 1, x + base - 1, y + base - 1,  x + base, y - height + 1,  x - base, y - height + 1)
-       gc.draw(@background) 
+       @groundX = x
+       @groundY = y
+       @groundBase = base
+       @groundHeight = height
        worldElement = []
        worldElement << Gosu::Image.new(@window, box_image, false) 
        worldElement << body 
-       worldElement << x-15
-       worldElement << y-29
+       worldElement << x - base
+       worldElement << y - height
        @worldElements << worldElement
+   end
+
+   def getEarthsPosition
+        return @groundX, @groundY, @groundBase, @groundHeight
    end
       
    def moveWorldLeft(dist)
